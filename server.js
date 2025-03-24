@@ -26,7 +26,38 @@ mongoose.connect(process.env.MONGO_URI, {
 .then(() => console.log("✅ MongoDB Connected"))
 .catch(err => console.error("❌ MongoDB Connection Error:", err));
 
-// Existing WebSocket functions here...
+// 🔹 Function to Get User Info via WebSocket
+async function getDerivUserInfo(token) {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${process.env.DERIV_APP_ID}`);
+
+        ws.on("open", () => {
+            console.log("✅ WebSocket Connected for User Info");
+            ws.send(JSON.stringify({ authorize: token }));
+        });
+
+        ws.on("message", (data) => {
+            const response = JSON.parse(data);
+            if (response.error) {
+                console.error("❌ Deriv API Error:", response.error);
+                reject(new Error(response.error.message));
+            } else {
+                console.log("✅ User Info Retrieved:", response.authorize);
+                resolve(response.authorize);
+            }
+            ws.close();
+        });
+
+        ws.on("error", (error) => {
+            console.error("❌ WebSocket Error:", error.message);
+            reject(error);
+        });
+
+        ws.on("close", (code, reason) => {
+            console.warn(`⚠️ WebSocket closed: ${code} - ${reason}`);
+        });
+    });
+}
 
 // 🔹 OAuth Callback Route
 app.get("/callback", async (req, res) => {
@@ -42,7 +73,6 @@ app.get("/callback", async (req, res) => {
 
     try {
         const userInfo = await getDerivUserInfo(derivToken);
-        const userBalance = await getDerivBalance(derivToken);
 
         console.log("✅ User Info Retrieved:", userInfo);
 
@@ -53,16 +83,17 @@ app.get("/callback", async (req, res) => {
             {
                 fullname: userFullname,
                 email: userInfo.email || `user_${derivAccount}@deriv.com`,
+                deriv_account: derivAccount, // ✅ Ensure deriv_account is stored
                 access_token: derivToken,
-                balance: userBalance,
                 currency: userInfo.currency || "USD",
+                balance: userInfo.balance || 0,
             },
             { upsert: true, new: true }
         );
 
         console.log("✅ User Stored in MongoDB:", user);
 
-        const redirectURL = `${process.env.FRONTEND_URL}/auth-success?access_token=${derivToken}&deriv_account=${derivAccount}`;
+        const redirectURL = `${process.env.FRONTEND_URL}/auth-success?deriv_account=${derivAccount}`;
         console.log("✅ Redirecting user to:", redirectURL);
 
         res.redirect(redirectURL);
